@@ -361,34 +361,16 @@ mutable struct Results_trans
     theta_path::Array{Float64,1} #path of terms
 end
 
-function Solve_trans(prim::Primitives, res_base::results, res_noss::results)
-    @unpack T, na, nz, N, a_grid, α, μ, δ, J, σ, γ, Z, age_eff = prim
-
-    cap_agg = collect(range(res_base.K, length = T, stop = res_noss.K))
-    lab_agg = collect(range(res_base.L, length = T, stop = res_noss.L))
-
-    theta_path = [res_base.θ; ones(T-1)*res_noss.θ]
-    val_func = zeros(na,nz,N,T)
-    val_func[:,:,:,1] = res_base.val_func
-    val_func[:,:,:,T] = res_noss.val_func
-    pol_func = zeros(na,nz,N,T)
-    pol_func[:,:,:,1] = res_base.pol_func
-    pol_func[:,:,:,T] = res_noss.pol_func
-    lab_func = zeros(na,nz,N,T)
-    lab_func[:,:,:,1] = res_base.lab_func_W
-    lab_func[:,:,:,T] = res_noss.lab_func_W
-    stat_dist = zeros(na,nz,N,T)
-    stat_dist[:,:,:,1] = res_base.dist_ss
-    stat_dist[:,:,:,T] = res_noss.dist_ss
-    wage = [res_base.w; zeros(T); res_noss.w]
-    r = [res_base.r; zeros(T); res_noss.r]
-    ss_b = [res_base.b; zeros(T); res_noss.b]
-
-    res_trans = Results_trans(val_func, pol_func, lab_func, stat_dist, wage, r, ss_b, cap_agg, lab_agg, theta_path)
+function Backward_Induction(prim::Primitives, res_trans::Results_trans)
+    @unpack T, na, nz, N, a_grid, α, μ, δ, J, σ, γ, Z, age_eff, Π, β = prim
 
     w_next = (1 - α) * (res_trans.cap_agg[T-1]/res_trans.lab_agg[T-1])^α
+    res_trans.wage[T-1] = w_next
     r_next = α * (res_trans.lab_agg[T-1]/res_trans.cap_agg[T-1])^(1-α) - δ
+    res_trans.rate[T-1] = r_next
     b_next = (res_trans.theta_path[T-1]*w_next*res_trans.lab_agg[T-1]) / sum( μ[J:N] )
+    res_trans.ss_b[T-1] = b_next
+    θ_next = res_trans.theta_path[T-1]
 
     for j_index = N
         for a_index = 1:na
@@ -400,7 +382,9 @@ function Solve_trans(prim::Primitives, res_base::results, res_noss::results)
                 if res_trans.val_func[a_index, z_index, j_index, T-1] == -Inf
                     res_trans.val_func[a_index, z_index, j_index, T-1] = -1e12
                 end
+                res_trans.pol_func[a_index, z_index, j_index, T-1] = 0
                 res_trans.pol_ind_func[a_index, z_index, j_index, T-1] = 1
+                res_trans.lab_func[a_index, z_index, j_index, T-1] = 0
             end
         end
     end
@@ -421,22 +405,195 @@ function Solve_trans(prim::Primitives, res_base::results, res_noss::results)
                     end
 
                     if c >= 0
-                        val = ( (c^γ) * ((1-l)^(1-γ)) )^(1-σ)/(1-σ) + β*sum(Π[z_index,:].*val_func[ap_index,:,j_index + 1,T])
+                        val = ( (c^γ) * ((1-l)^(1-γ)) )^(1-σ)/(1-σ) + β*sum(Π[z_index,:].*res_trans.val_func[ap_index,:,j_index + 1,T])
 
                         if val > candidate
                             candidate = val
-                            pol_func[a_index, z_index, j_index, T-1] = a_grid[ap_index]
-                            pol_ind[a_index, z_index, j_index, T-1] = ap_index
-                            lab_func[a_index, z_index, j_index, T-1] = l
+                            res_trans.pol_func[a_index, z_index, j_index, T-1] = a_grid[ap_index]
+                            res_trans.pol_ind_func[a_index, z_index, j_index, T-1] = ap_index
+                            res_trans.lab_func[a_index, z_index, j_index, T-1] = l
                         end
                     end
                 end
-                val_func_W[a_index, z_index, j_index, T-1] = candidate
+                res_trans.val_func[a_index, z_index, j_index, T-1] = candidate
+                if res_trans.pol_func[a_index, z_index, j_index, T-1] == 0
+                    res_trans.pol_ind_func[a_index, z_index, j_index, T-1] = 1
+                end
             end
         end
     end
 
+
+    for t_index = T-2:-1:1
+    w_next = (1 - α) * (res_trans.cap_agg[t_index]/res_trans.lab_agg[t_index])^α
+    res_trans.wage[t_index] = w_next
+    r_next = α * (res_trans.lab_agg[t_index]/res_trans.cap_agg[t_index])^(1-α) - δ
+    res_trans.rate[t_index] = r_next
+    b_next = (res_trans.theta_path[t_index]*w_next*res_trans.lab_agg[t_index]) / sum( μ[J:N] )
+    res_trans.ss_b[t_index] = b_next
+    θ_next = res_trans.theta_path[t_index]
+
+        for j_index = N
+            for a_index = 1:na
+                for z_index = 1:nz
+
+                    c = (1+r_next)*a_grid[a_index] + b_next #column vector consumption
+
+                    res_trans.val_func[a_index, z_index, j_index, t_index] = c^((1-σ)*γ)/(1-σ) #column vector utility
+                    if res_trans.val_func[a_index, z_index, j_index, t_index] == -Inf
+                        res_trans.val_func[a_index, z_index, j_index, t_index] = -1e12
+                    end
+                    res_trans.pol_func[a_index, z_index, j_index, t_index] = 0
+                    res_trans.pol_ind_func[a_index, z_index, j_index, t_index] = 1
+                    res_trans.lab_func[a_index, z_index, j_index, t_index] = 0
+                end
+            end
+        end
+
+        for j_index = N-1:-1:1
+            for a_index = 1:na
+                for z_index = 1:nz
+                    candidate = -1e12
+
+                    for ap_index = 1:na
+
+                        if j_index >= J
+                            l = 0
+                            c = (1+r_next)*a_grid[a_index] - a_grid[ap_index]
+                        else
+                            l = Optimal_Labor(prim, a_index, ap_index, z_index, j_index)
+                            c = w_next*(1-θ_next)*Z[z_index]*age_eff[j_index]*l + (1+r_next)*a_grid[a_index] - a_grid[ap_index]
+                        end
+
+                        if c >= 0
+                            val = ( (c^γ) * ((1-l)^(1-γ)) )^(1-σ)/(1-σ) + β*sum(Π[z_index,:].*res_trans.val_func[ap_index,:,j_index + 1,t_index + 1])
+
+                            if val > candidate
+                                candidate = val
+                                res_trans.pol_func[a_index, z_index, j_index, t_index] = a_grid[ap_index]
+                                res_trans.pol_ind_func[a_index, z_index, j_index, t_index] = ap_index
+                                res_trans.lab_func[a_index, z_index, j_index, t_index] = l
+                            end
+                        end
+                    end
+                    res_trans.val_func[a_index, z_index, j_index, t_index] = candidate
+                    if res_trans.pol_func[a_index, z_index, j_index, t_index] == 0
+                        res_trans.pol_ind_func[a_index, z_index, j_index, t_index] = 1
+                    end
+                end
+            end
+        end
+    end
 end
 
+function Solve_trans(prim::Primitives, res_base::Results, res_noss::Results)
+    @unpack T, na, nz, N, a_grid, α, μ, δ, J, σ, γ, Z, age_eff, Π, β = prim
+
+    # make initual guess for the sequences of capital and labor
+    cap_agg = collect(range(res_base.K, length = T, stop = res_noss.K))
+    lab_agg = collect(range(res_base.L, length = T, stop = res_noss.L))
+
+    theta_path = [res_base.θ; ones(T-1)*res_noss.θ]
+    val_func = zeros(na,nz,N,T)
+    val_func[:,:,:,1] = res_base.val_func
+    val_func[:,:,:,T] = res_noss.val_func
+    pol_func = zeros(na,nz,N,T)
+    pol_func[:,:,:,1] = res_base.pol_func
+    pol_func[:,:,:,T] = res_noss.pol_func
+    pol_ind_func = zeros(na,nz,N,T)
+    pol_ind_func[:,:,:,1] = res_base.pol_ind_func
+    pol_ind_func[:,:,:,T] = res_noss.pol_ind_func
+    lab_func = zeros(na,nz,N,T)
+    lab_func[:,:,:,1] = res_base.lab_func_W
+    lab_func[:,:,:,T] = res_noss.lab_func_W
+    stat_dist = zeros(na,nz,N,T)
+    stat_dist[:,:,:,1] = res_base.dist_ss
+    stat_dist[:,:,:,T] = res_noss.dist_ss
+    wage = [res_base.w; zeros(T-2); res_noss.w]
+    r = [res_base.r; zeros(T-2); res_noss.r]
+    ss_b = [res_base.b; zeros(T-2); res_noss.b]
+
+    res_trans = Results_trans(val_func, pol_func, pol_ind_func, lab_func, stat_dist, wage, r, ss_b, cap_agg, lab_agg, theta_path)
+
+    err = 10
+    count = 1
+
+    while err > 1
+
+        Backward_Induction(prim, res_trans)
+        Steady_State_Dist_Trans(prim, res_trans)
+        K_seq, L_seq = Aggregate_Capital_Labor_Trans(prim, res_trans)
+
+        err = sum((K_seq - res_trans.cap_agg).^2 + (L_seq - res_trans.lab_agg).^2)
+        println("Iteration: ", count, ", Error: ", err)
+
+        K_new = 0.1*res_trans.cap_agg + 0.9*K_seq
+        L_new = 0.1*res_trans.lab_agg + 0.9*L_seq
+
+        res_trans.cap_agg = K_new
+        res_trans.lab_agg = L_new
+        count += 1
+
+    end
+    res_trans
+end
+
+function Steady_State_Dist_Trans(prim::Primitives, res_trans::Results_trans)
+    @unpack N, n, nz, na, a_initial, e_dist, Π, J, μ, T = prim #unpack model primitives
+
+    for t_index = 1:T-1
+
+        dist_ss = zeros(na, nz, N)
+        dist_ss[1,1,1] = μ[1] * e_dist
+        dist_ss[1,2,1] = μ[1] * (1 - e_dist)
+
+        for j_index = 1:J-1
+            for z_index = 1:nz
+                for a_index = 1:na
+                    a_next_ind = res_trans.pol_ind_func[a_index,z_index,j_index,t_index]
+                    dist_ss[a_next_ind,:,j_index+1] += dist_ss[a_index, z_index,j_index] * Π[z_index,:]
+                end
+            end
+            dist_ss[:,:,j_index+1] = dist_ss[:,:,j_index+1] / (1+n)
+        end
+        dist_ss[:,1,J] = sum(dist_ss[:,:,J], dims=2)
+        dist_ss[:,nz,J] .= 0
+        for j_index = J:N-1
+            for z_index = 1
+                for a_index = 1:na
+                    a_next_ind = res_trans.pol_ind_func[a_index,z_index,j_index,t_index]
+                    dist_ss[a_next_ind,1,j_index+1] +=  dist_ss[a_index,1,j_index]
+                end
+            end
+            dist_ss[:,:,j_index+1] = dist_ss[:,:,j_index+1] / (1+n)
+        end
+        res_trans.stat_dist[:,:,:,t_index+1] = dist_ss
+    end
+end
+
+function Aggregate_Capital_Labor_Trans(prim::Primitives, res_trans::Results_trans)
+    @unpack a_grid, age_eff, N, na, nz, J, Z, T = prim #unpack model primitives
+
+    K_seq = zeros(T)
+    L_seq = zeros(T)
+
+    for t_index = 1:T
+        for j_index = 1:N
+            for a_index = 1:na
+                for z_index = 1:nz
+                    K_seq[t_index] += res_trans.stat_dist[a_index,z_index,j_index,t_index]*a_grid[a_index]
+                end
+            end
+        end
+        for j_index = 1:J-1
+            for a_index = 1:na
+                for z_index = 1:nz
+                    L_seq[t_index] += res_trans.stat_dist[a_index,z_index,j_index,t_index]*Z[z_index]*age_eff[j_index]*res_trans.lab_func[a_index,z_index,j_index,t_index]
+                end
+            end
+        end
+    end
+    K_seq, L_seq
+end
 
 ##############################################################################
