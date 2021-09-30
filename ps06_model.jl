@@ -457,14 +457,18 @@ function Backward_Induction(prim::Primitives, res_trans::Results_trans)
     end
 end
 
-function Solve_trans(prim::Primitives, res_base::Results, res_noss::Results; tol = 1e-3)
+function Solve_trans(prim::Primitives, res_base::Results, res_noss::Results; tol::Float64 = 1e-3, T::Int64 = 31, shift_date::Int64 = 1)
     @unpack na, nz, N, a_grid, α, μ, δ, J, σ, γ, Z, age_eff, Π, β = prim
 
     # make initual guess for the sequences of capital and labor
     cap_agg = collect(range(res_base.K, length = T, stop = res_noss.K))
     lab_agg = collect(range(res_base.L, length = T, stop = res_noss.L))
 
-    theta_path = [res_base.θ; ones(T-1)*res_noss.θ]
+    if shift_date == 1
+        theta_path = [res_base.θ; ones(T-1)*res_noss.θ]
+    else
+        theta_path = [ones(shift_date-1)*res_base.θ; ones(T-shift_date+1)*res_noss.θ]
+    end
     val_func = zeros(na,nz,N,T)
     val_func[:,:,:,1] = res_base.val_func
     val_func[:,:,:,T] = res_noss.val_func
@@ -483,7 +487,6 @@ function Solve_trans(prim::Primitives, res_base::Results, res_noss::Results; tol
     wage = [res_base.w; zeros(T-2); res_noss.w]
     r = [res_base.r; zeros(T-2); res_noss.r]
     ss_b = [res_base.b; zeros(T-2); res_noss.b]
-    T = 31
 
     res_trans = Results_trans(val_func, pol_func, pol_ind_func, lab_func, stat_dist, wage, r, ss_b, cap_agg, lab_agg, theta_path, T)
 
@@ -545,7 +548,7 @@ function Steady_State_Dist_Trans(prim::Primitives, res_trans::Results_trans)
 end
 
 function Aggregate_Capital_Labor_Trans(prim::Primitives, res_trans::Results_trans)
-    @unpack a_grid, age_eff, N, na, nz, J, Z, T = prim #unpack model primitives
+    @unpack a_grid, age_eff, N, na, nz, J, Z = prim #unpack model primitives
     @unpack T = res_trans
 
     K_seq = zeros(T)
