@@ -1,7 +1,7 @@
 ################################################################################
 # Author: Hoyoung Yoo, Soojeong Jung
-# Date: Septembeer 07, 2021
-# Purpose: Econ 899 PS05
+# Date: September 23th, 2021
+# Purpose: Econ 899 PS06 Transition path
 ################################################################################
 
 #keyword-enabled structure to hold model primitives
@@ -30,7 +30,6 @@
     age_eff::Array{Float64, 2} #age-efficiency profile
     μ::Array{Float64,1} #relative sizes of each cohort of age
     ϵ::Float64 = 0.00001 #tolerance
-    T::Int64 = 31
 end
 
 #structure that holds model results
@@ -251,46 +250,17 @@ function Aggregate_Capital_Labor(prim::Primitives, res::Results)
     @unpack a_grid, age_eff, N, na, nz, J, Z = prim #unpack model primitives
     @unpack dist_ss, lab_func_W = res
 
-    kk = 0
-    for j_index = 1:J
-        for a_index = 1:na
-            for z_index = 1:nz
-                kk = kk + dist_ss[a_index,z_index,j_index]*a_grid[a_index]
-            end
-        end
-    end
-    for j_index = J+1:N
-        for a_index = 1:na
-                kk = kk + dist_ss[a_index,1,j_index]*a_grid[a_index]
-        end
-    end
-    ll = 0
-    for j_index = 1:J-1
-        for a_index = 1:na
-            for z_index = 1:nz
-                ll += dist_ss[a_index,z_index,j_index]*Z[z_index]*age_eff[j_index]*lab_func_W[a_index,z_index,j_index]
-            end
-        end
-    end
     temp_K = dist_ss.*repeat(a_grid, outer= [1,nz,N])
     K_new = sum(temp_K)
 
-    temp_L = dist_ss[:,:,1:J-1].*repeat(reshape(age_eff, (1,1,45)), inner= [na,nz,1]).*lab_func_W[:,:,1:J-1]
+    temp_L = dist_ss[:,:,1:J-1].*repeat(reshape(Z, (1,2,1)), inner= [na,1,J-1]).*repeat(reshape(age_eff, (1,1,45)), inner= [na,nz,1]).*lab_func_W[:,:,1:J-1]
     L_new = sum(temp_L)
 
-    K_new, L_new, kk, ll
+    K_new, L_new
 end
 
 function Solve_model(prim::Primitives; θ::Float64 = 0.11, zh::Float64=3.0, zl::Float64=0.5, K::Float64=3.5, L::Float64=0.3)
     @unpack ϵ, α, δ, μ, J, N = prim #unpack model primitives
-
-    #Dynamic_Programming_Worker(prim, res)
-     #Dynamic_Programming_Retiree(prim, res)
-    #Steady_State_Dist(prim,res)
-    #(K_now, L_now) = Aggregate_Capital_Labor(prim, res)
-#    K = 3.5
-#    L = 0.3
-#    θ = 0.11
 
     val_func = zeros(prim.na, prim.nz, prim.N)
     pol_func = zeros(prim.na, prim.nz, prim.N)
@@ -319,8 +289,7 @@ function Solve_model(prim::Primitives; θ::Float64 = 0.11, zh::Float64=3.0, zl::
         Dynamic_Programming_Retiree(prim, res)
         Dynamic_Programming_Worker(prim, res)
         Steady_State_Dist(prim,res)
-        (K_new, L_new, kk, ll) = Aggregate_Capital_Labor(prim, res)
-        L_new = ll
+        (K_new, L_new) = Aggregate_Capital_Labor(prim, res)
         err = sum( ( [K_new, L_new] - [res.K, res.L] ).^2 )
         res.K = 0.95*res.K + 0.05*K_new
         res.L = 0.95*res.L + 0.05*L_new
@@ -359,10 +328,12 @@ mutable struct Results_trans
     cap_agg::Array{Float64,1} #aggregate capital
     lab_agg::Array{Float64,1} #aggregate labor
     theta_path::Array{Float64,1} #path of terms
+    T::Int64
 end
 
 function Backward_Induction(prim::Primitives, res_trans::Results_trans)
-    @unpack T, na, nz, N, a_grid, α, μ, δ, J, σ, γ, Z, age_eff, Π, β = prim
+    @unpack na, nz, N, a_grid, α, μ, δ, J, σ, γ, Z, age_eff, Π, β = prim
+    @unpack T = res_trans
 
     w_next = (1 - α) * (res_trans.cap_agg[T-1]/res_trans.lab_agg[T-1])^α
     res_trans.wage[T-1] = w_next
@@ -425,13 +396,13 @@ function Backward_Induction(prim::Primitives, res_trans::Results_trans)
 
 
     for t_index = T-2:-1:1
-    w_next = (1 - α) * (res_trans.cap_agg[t_index]/res_trans.lab_agg[t_index])^α
-    res_trans.wage[t_index] = w_next
-    r_next = α * (res_trans.lab_agg[t_index]/res_trans.cap_agg[t_index])^(1-α) - δ
-    res_trans.rate[t_index] = r_next
-    b_next = (res_trans.theta_path[t_index]*w_next*res_trans.lab_agg[t_index]) / sum( μ[J:N] )
-    res_trans.ss_b[t_index] = b_next
-    θ_next = res_trans.theta_path[t_index]
+        w_next = (1 - α) * (res_trans.cap_agg[t_index]/res_trans.lab_agg[t_index])^α
+        res_trans.wage[t_index] = w_next
+        r_next = α * (res_trans.lab_agg[t_index]/res_trans.cap_agg[t_index])^(1-α) - δ
+        res_trans.rate[t_index] = r_next
+        b_next = (res_trans.theta_path[t_index]*w_next*res_trans.lab_agg[t_index]) / sum( μ[J:N] )
+        res_trans.ss_b[t_index] = b_next
+        θ_next = res_trans.theta_path[t_index]
 
         for j_index = N
             for a_index = 1:na
@@ -486,8 +457,8 @@ function Backward_Induction(prim::Primitives, res_trans::Results_trans)
     end
 end
 
-function Solve_trans(prim::Primitives, res_base::Results, res_noss::Results)
-    @unpack T, na, nz, N, a_grid, α, μ, δ, J, σ, γ, Z, age_eff, Π, β = prim
+function Solve_trans(prim::Primitives, res_base::Results, res_noss::Results; tol = 1e-3)
+    @unpack na, nz, N, a_grid, α, μ, δ, J, σ, γ, Z, age_eff, Π, β = prim
 
     # make initual guess for the sequences of capital and labor
     cap_agg = collect(range(res_base.K, length = T, stop = res_noss.K))
@@ -512,13 +483,14 @@ function Solve_trans(prim::Primitives, res_base::Results, res_noss::Results)
     wage = [res_base.w; zeros(T-2); res_noss.w]
     r = [res_base.r; zeros(T-2); res_noss.r]
     ss_b = [res_base.b; zeros(T-2); res_noss.b]
+    T = 31
 
-    res_trans = Results_trans(val_func, pol_func, pol_ind_func, lab_func, stat_dist, wage, r, ss_b, cap_agg, lab_agg, theta_path)
+    res_trans = Results_trans(val_func, pol_func, pol_ind_func, lab_func, stat_dist, wage, r, ss_b, cap_agg, lab_agg, theta_path, T)
 
     err = 10
     count = 1
 
-    while err > 1
+    while err > tol
 
         Backward_Induction(prim, res_trans)
         Steady_State_Dist_Trans(prim, res_trans)
@@ -539,7 +511,8 @@ function Solve_trans(prim::Primitives, res_base::Results, res_noss::Results)
 end
 
 function Steady_State_Dist_Trans(prim::Primitives, res_trans::Results_trans)
-    @unpack N, n, nz, na, a_initial, e_dist, Π, J, μ, T = prim #unpack model primitives
+    @unpack N, n, nz, na, a_initial, e_dist, Π, J, μ = prim #unpack model primitives
+    @unpack T = res_trans
 
     for t_index = 1:T-1
 
@@ -573,6 +546,7 @@ end
 
 function Aggregate_Capital_Labor_Trans(prim::Primitives, res_trans::Results_trans)
     @unpack a_grid, age_eff, N, na, nz, J, Z, T = prim #unpack model primitives
+    @unpack T = res_trans
 
     K_seq = zeros(T)
     L_seq = zeros(T)
